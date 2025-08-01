@@ -3,13 +3,14 @@ FROM node:24.4-slim
 WORKDIR /app
 
 # Copy package files
-COPY package*.json ./
+COPY package*.json tsconfig.json ./
 
 # Install dependencies
-RUN npm install
+RUN npm i
 
 # Copy source code
-COPY . .
+COPY public ./public
+COPY src ./src
 
 # Expose port
 EXPOSE 3000

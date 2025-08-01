@@ -22,8 +22,8 @@ services:
       context: ./frontend
     expose:
       - 3000
-    volumes:
-      - ./frontend:/app
+#    volumes:
+#      - ./frontend:/app
     environment:
       NODE_ENV: ${ENVIRONMENT}
       REACT_APP_API_URL: ${BACKEND_API_URL}
@@ -35,8 +35,8 @@ services:
       context: ./backend
     expose:
       - 8000
-    volumes:
-      - ./backend:/app
+#    volumes:
+#      - ./backend:/app
     env_file: .env
     environment:
       ENVIRONMENT: ${ENVIRONMENT}
@@ -49,8 +49,8 @@ services:
   scan-worker:
     build:
       context: ./backend
-    volumes:
-      - ./backend:/app
+#    volumes:
+#      - ./backend:/app
     env_file: .env
     environment:
       ENVIRONMENT: ${ENVIRONMENT}
