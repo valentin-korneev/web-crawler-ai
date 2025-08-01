@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException
 from typing import List
 from app.models.contractor import Contractor
+from app.models.scan_session import ScanSession
 from app.models.user import User
 from app.models.webpage import WebPage
 from app.models.scan_result import Violation
@@ -8,6 +9,7 @@ from app.core.auth import get_current_user
 from app.schemas.contractor import ContractorCreate, ContractorUpdate, ContractorResponse
 from app.schemas.violation import WebPageDetailResponse
 from app.services.queue_service import queue_service
+from tortoise.functions import Sum
 
 
 router = APIRouter()
@@ -17,7 +19,20 @@ router = APIRouter()
 async def get_contractors(current_user: User = Depends(get_current_user)):
     """Получение списка контрагентов"""
     contractors = await Contractor.all().order_by('id')
-    return [ContractorResponse.from_orm(contractor) for contractor in contractors]
+    contractors_response = [ContractorResponse.from_orm(contractor) for contractor in contractors]
+    for contractor in contractors_response:
+        result = await ScanSession.filter(
+            contractor_id=contractor.id
+        ).annotate(
+            pages_scanned=Sum('pages_scanned'),
+            pages_with_violations=Sum('pages_with_violations'),
+            total_violations=Sum('total_violations')
+
+        ).values('pages_scanned', 'pages_with_violations', 'total_violations')
+        contractor.total_pages = result[0].get('pages_scanned')
+        contractor.scanned_pages = result[0].get('pages_with_violations')
+        contractor.violations_found = result[0].get('total_violations')
+    return contractors_response
 
 @router.post("/", response_model=ContractorResponse)
 async def create_contractor(
@@ -37,7 +52,19 @@ async def get_contractor(contractor_id: int, current_user: User = Depends(get_cu
     contractor = await Contractor.get_or_none(id=contractor_id)
     if not contractor:
         raise HTTPException(status_code=404, detail="Contractor not found")
-    return ContractorResponse.from_orm(contractor)
+    contractor = ContractorResponse.from_orm(contractor)
+
+    result = await ScanSession.filter(
+        contractor_id=contractor.id
+    ).annotate(
+        pages_scanned=Sum('pages_scanned'),
+        total_violations=Sum('total_violations')
+
+    ).values('pages_scanned', 'total_violations')
+    contractor.total_pages = result[0].get('pages_scanned')
+    contractor.scanned_pages = result[0].get('pages_scanned')
+    contractor.violations_found = result[0].get('total_violations')
+    return contractor
 
 @router.put("/{contractor_id}", response_model=ContractorResponse)
 async def update_contractor(
