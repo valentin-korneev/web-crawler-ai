@@ -1,0 +1,67 @@
+[project]
+name = "huginn-backend"
+version = "0.1.0"
+description = "Backend для системы проверки контрагентов банка"
+authors = [
+    {name = "Huginn Team", email = "team@huginn.local"}
+]
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "aerich>=0.9.1",
+    "aio-pika>=9.5.5",
+    "aiohttp>=3.12.15",
+    "aiologger>=0.7.0",
+    "bcrypt>=4.3.0",
+    "beautifulsoup4>=4.13.4",
+    "fastapi>=0.116.1",
+    "pydantic-settings>=2.10.1",
+    "python-jose[cryptography]>=3.5.0",
+    "python-multipart>=0.0.20",
+    "tortoise-orm[asyncpg]>=0.25.1",
+    "uvicorn[standard]>=0.35.0",
+]
+
+[dependency-groups]
+dev = [
+    "bandit>=1.8.6",
+    "pylint>=3.3.7",
+]
+
+[tool.pylint.'MAIN']
+ignore = [".venv"]
+
+[tool.pylint.messages_control]
+disable = [
+    "C0114",  # missing-module-docstring
+    "C0115",  # missing-class-docstring
+    "C0116",  # missing-function-docstring
+    "R0903",  # too-few-public-methods
+    "R0913",  # too-many-arguments
+    "W0621",  # redefined-outer-name
+    "W0612",  # unused-variable
+    "W0613",  # unused-argument
+]
+
+[tool.pylint.format]
+max-line-length = 120
+
+[tool.pylint.design]
+max-args = 10
+max-attributes = 10
+max-bool-expr = 5
+max-branches = 12
+max-locals = 15
+max-parents = 7
+max-public-methods = 20
+max-returns = 6
+max-statements = 50
+
+[tool.bandit]
+exclude_dirs = ["tests", "migrations"]
+skips = ["B101", "B601"]
+
+[tool.aerich]
+tortoise_orm = "app.core.database.TORTOISE_ORM"
+location = "./migrations"
+src_folder = "./."

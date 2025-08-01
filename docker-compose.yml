@@ -1,0 +1,97 @@
+name: huginn
+
+services:
+  database:
+    image: postgres:17.5-alpine3.22
+    environment:
+      POSTGRES_DB: ${DATABASE_NAME}
+      POSTGRES_USER: ${DATABASE_USER}
+      POSTGRES_PASSWORD: ${DATABASE_PASS}
+    ports:
+      - "${DATABASE_PORT}:5432"
+    volumes:
+      - database_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DATABASE_USER} -d ${DATABASE_NAME}"]
+      interval: 5s
+      timeout: 60s
+      retries: 10
+
+  frontend:
+    build:
+      context: ./frontend
+    expose:
+      - 3000
+    volumes:
+      - ./frontend:/app
+    environment:
+      NODE_ENV: ${ENVIRONMENT}
+      REACT_APP_API_URL: ${BACKEND_API_URL}
+    depends_on:
+      - backend
+
+  backend:
+    build:
+      context: ./backend
+    expose:
+      - 8000
+    volumes:
+      - ./backend:/app
+    env_file: .env
+    environment:
+      ENVIRONMENT: ${ENVIRONMENT}
+    depends_on:
+      database:
+        condition: service_healthy
+      mq:
+        condition: service_started
+
+  scan-worker:
+    build:
+      context: ./backend
+    volumes:
+      - ./backend:/app
+    env_file: .env
+    environment:
+      ENVIRONMENT: ${ENVIRONMENT}
+    command: python -m app.workers.scan_worker
+    depends_on:
+      database:
+        condition: service_healthy
+      mq:
+        condition: service_started
+
+  mq:
+    image: rabbitmq:4.1.2-management-alpine
+    ports:
+      - "${MQ_MANAGEMENT_PORT}:15672"
+    expose:
+      - 5672
+      - 15672
+    environment:
+      RABBITMQ_DEFAULT_USER: ${MQ_USER}
+      RABBITMQ_DEFAULT_PASS: ${MQ_PASS}
+    volumes:
+      - mq_data:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD-SHELL", "rabbitmq-diagnostics -q ping"]
+      interval: 5s
+      timeout: 60s
+      retries: 10
+
+  nginx:
+    image: nginx:1.29.0-alpine
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf
+      - ./nginx/conf.d:/etc/nginx/conf.d
+      - ./nginx/ssl:/etc/nginx/ssl
+    depends_on:
+      - frontend
+      - backend
+
+volumes:
+  database_data:
+  mq_data:
