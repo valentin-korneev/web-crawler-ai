@@ -1,5 +1,5 @@
-from fastapi import APIRouter, Depends, HTTPException
-from typing import List, Dict, Any
+from fastapi import APIRouter, Depends, HTTPException, Query
+from typing import List, Dict, Any, Optional
 from app.models.user import User
 from app.models.webpage import WebPage
 from app.models.scan_result import Violation
@@ -9,18 +9,28 @@ router = APIRouter()
 
 
 @router.get("/")
-async def get_scan_results(current_user: User = Depends(get_current_user)) -> List[Dict[str, Any]]:
+async def get_scan_results(
+    page: int = Query(1, ge=1, description="Номер страницы"),
+    page_size: int = Query(20, ge=1, le=100, description="Размер страницы"),
+    current_user: User = Depends(get_current_user)
+) -> Dict[str, Any]:
     """Получение всех результатов сканирования с нарушениями"""
     try:
-        # Получаем все страницы с нарушениями
+        # Подсчитываем общее количество страниц с нарушениями
+        total_pages = await WebPage.filter(violations_found=True).count()
+        
+        # Вычисляем смещение для пагинации
+        offset = (page - 1) * page_size
+        
+        # Получаем страницы с нарушениями с пагинацией
         pages_with_violations = await WebPage.filter(
             violations_found=True
-        ).prefetch_related('contractor', 'violations__forbidden_word').order_by('-id')
+        ).prefetch_related('contractor', 'violations__forbidden_word').order_by('-id').offset(offset).limit(page_size)
         
         results = []
-        for page in pages_with_violations:
+        for page_obj in pages_with_violations:
             # Получаем нарушения для страницы
-            violations = await Violation.filter(webpage=page).prefetch_related('forbidden_word')
+            violations = await Violation.filter(webpage=page_obj).prefetch_related('forbidden_word')
             
             violations_data = []
             for violation in violations:
@@ -36,29 +46,42 @@ async def get_scan_results(current_user: User = Depends(get_current_user)) -> Li
                     "forbidden_word_description": violation.forbidden_word.description,
                     "created_at": violation.created_at.isoformat() if violation.created_at else None,
                     "webpage": {
-                        "id": page.id,
-                        "url": page.url,
-                        "title": page.title,
+                        "id": page_obj.id,
+                        "url": page_obj.url,
+                        "title": page_obj.title,
                         "contractor": {
-                            "id": page.contractor.id,
-                            "name": page.contractor.name,
-                            "domain": page.contractor.domain,
+                            "id": page_obj.contractor.id,
+                            "name": page_obj.contractor.name,
+                            "domain": page_obj.contractor.domain,
                         }
                     }
                 })
             
             results.append({
-                "id": page.id,
-                "url": page.url,
-                "title": page.title,
-                "contractor_name": page.contractor.name,
-                "contractor_domain": page.contractor.domain,
-                "violations_count": page.violations_count,
-                "last_scanned": page.last_scanned.isoformat() if page.last_scanned else None,
+                "id": page_obj.id,
+                "url": page_obj.url,
+                "title": page_obj.title,
+                "contractor_name": page_obj.contractor.name,
+                "contractor_domain": page_obj.contractor.domain,
+                "violations_count": page_obj.violations_count,
+                "last_scanned": page_obj.last_scanned.isoformat() if page_obj.last_scanned else None,
                 "violations": violations_data
             })
         
-        return results
+        # Вычисляем общее количество страниц
+        total_pages_count = (total_pages + page_size - 1) // page_size
+        
+        return {
+            "items": results,
+            "pagination": {
+                "page": page,
+                "page_size": page_size,
+                "total_items": total_pages,
+                "total_pages": total_pages_count,
+                "has_next": page < total_pages_count,
+                "has_prev": page > 1
+            }
+        }
         
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error getting scan results: {str(e)}") 

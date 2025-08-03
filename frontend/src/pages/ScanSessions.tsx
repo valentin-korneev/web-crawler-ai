@@ -38,6 +38,7 @@ import {
 } from '@mui/icons-material';
 import { api } from '../services/api';
 import { API_ENDPOINTS } from '../config/api';
+import Pagination from '../components/Pagination';
 
 interface ScanSession {
   id: number;
@@ -87,6 +88,23 @@ interface ScanSessionDetail {
       forbidden_word_category: string;
     }>;
   }>;
+  pagination?: {
+    page: number;
+    page_size: number;
+    total_items: number;
+    total_pages: number;
+    has_next: boolean;
+    has_prev: boolean;
+  };
+}
+
+interface PaginationData {
+  page: number;
+  page_size: number;
+  total_items: number;
+  total_pages: number;
+  has_next: boolean;
+  has_prev: boolean;
 }
 
 const ScanSessions: React.FC = () => {
@@ -98,21 +116,51 @@ const ScanSessions: React.FC = () => {
   const [startDialogOpen, setStartDialogOpen] = useState(false);
   const [selectedContractor, setSelectedContractor] = useState<number | null>(null);
   const [contractors, setContractors] = useState<Array<{ id: number; name: string; domain: string }>>([]);
+  const [pagination, setPagination] = useState<PaginationData>({
+    page: 1,
+    page_size: 20,
+    total_items: 0,
+    total_pages: 0,
+    has_next: false,
+    has_prev: false,
+  });
+  const [sessionPagination, setSessionPagination] = useState<PaginationData>({
+    page: 1,
+    page_size: 20,
+    total_items: 0,
+    total_pages: 0,
+    has_next: false,
+    has_prev: false,
+  });
 
   useEffect(() => {
     fetchSessions();
     fetchContractors();
-  }, []);
+  }, [pagination.page, pagination.page_size]);
 
   const fetchSessions = async () => {
     try {
       setLoading(true);
-      const response = await api.get(API_ENDPOINTS.SCAN_SESSIONS.LIST);
-      setSessions(response.data);
-      setError(null);
-    } catch (err) {
-      setError('Ошибка при загрузке сессий сканирования');
+      const response = await api.get(API_ENDPOINTS.SCAN_SESSIONS.LIST, {
+        params: {
+          page: pagination.page,
+          page_size: pagination.page_size,
+        },
+      });
+      
+      if (response.data.items) {
+        setSessions(response.data.items);
+        setPagination(prev => ({
+          ...prev,
+          ...response.data.pagination,
+        }));
+      } else {
+        // Fallback for old API format
+        setSessions(response.data);
+      }
+    } catch (err: any) {
       console.error('Error fetching sessions:', err);
+      setError(err.response?.data?.detail || 'Ошибка загрузки данных');
     } finally {
       setLoading(false);
     }
@@ -120,62 +168,90 @@ const ScanSessions: React.FC = () => {
 
   const fetchContractors = async () => {
     try {
-      const response = await api.get(API_ENDPOINTS.CONTRACTORS.LIST);
-      setContractors(response.data);
-    } catch (err) {
+      const response = await api.get(API_ENDPOINTS.CONTRACTORS.GET);
+      setContractors(response.data.items || response.data);
+    } catch (err: any) {
       console.error('Error fetching contractors:', err);
     }
   };
 
-  const fetchSessionDetail = async (sessionId: number) => {
+  const fetchSessionDetail = async (sessionId: number, page: number = 1, pageSize: number = 20) => {
     try {
-      const response = await api.get(API_ENDPOINTS.SCAN_SESSIONS.GET(sessionId));
+      const response = await api.get(API_ENDPOINTS.SCAN_SESSIONS.GET(sessionId), {
+        params: {
+          page,
+          page_size: pageSize,
+        },
+      });
+      
+      if (response.data.pagination) {
+        setSessionPagination(response.data.pagination);
+      }
+      
       setSelectedSession(response.data);
       setDetailDialogOpen(true);
-    } catch (err) {
-      setError('Ошибка при загрузке деталей сессии');
+    } catch (err: any) {
       console.error('Error fetching session detail:', err);
+      setError(err.response?.data?.detail || 'Ошибка загрузки деталей сессии');
+    }
+  };
+
+  const handlePageChange = (page: number) => {
+    setPagination(prev => ({ ...prev, page }));
+  };
+
+  const handlePageSizeChange = (pageSize: number) => {
+    setPagination(prev => ({ ...prev, page: 1, page_size: pageSize }));
+  };
+
+  const handleSessionPageChange = (page: number) => {
+    if (selectedSession) {
+      fetchSessionDetail(selectedSession.id, page, sessionPagination.page_size);
+    }
+  };
+
+  const handleSessionPageSizeChange = (pageSize: number) => {
+    if (selectedSession) {
+      fetchSessionDetail(selectedSession.id, 1, pageSize);
     }
   };
 
   const handleDeleteSession = async (sessionId: number) => {
-    if (!window.confirm('Вы уверены, что хотите удалить эту сессию сканирования?')) {
-      return;
-    }
-
-    try {
-      await api.delete(API_ENDPOINTS.SCAN_SESSIONS.DELETE(sessionId));
-      await fetchSessions();
-    } catch (err) {
-      setError('Ошибка при удалении сессии');
-      console.error('Error deleting session:', err);
+    if (window.confirm('Вы уверены, что хотите удалить эту сессию?')) {
+      try {
+        await api.delete(API_ENDPOINTS.SCAN_SESSIONS.DELETE(sessionId));
+        fetchSessions();
+      } catch (err: any) {
+        console.error('Error deleting session:', err);
+        setError(err.response?.data?.detail || 'Ошибка удаления сессии');
+      }
     }
   };
 
   const handleStartSession = async () => {
     if (!selectedContractor) return;
-
+    
     try {
       await api.post(API_ENDPOINTS.SCAN_SESSIONS.START(selectedContractor));
       setStartDialogOpen(false);
       setSelectedContractor(null);
-      await fetchSessions();
-    } catch (err) {
-      setError('Ошибка при запуске сессии сканирования');
+      fetchSessions();
+    } catch (err: any) {
       console.error('Error starting session:', err);
+      setError(err.response?.data?.detail || 'Ошибка запуска сессии');
     }
   };
 
   const getStatusIcon = (status: string) => {
     switch (status) {
       case 'running':
-        return <CircularProgress size={20} />;
+        return <TimerIcon color="primary" />;
       case 'completed':
         return <SuccessIcon color="success" />;
       case 'failed':
         return <ErrorIcon color="error" />;
       default:
-        return <WarningIcon color="warning" />;
+        return <WarningIcon />;
     }
   };
 
@@ -188,7 +264,7 @@ const ScanSessions: React.FC = () => {
       case 'failed':
         return 'error';
       default:
-        return 'warning';
+        return 'default';
     }
   };
 
@@ -209,101 +285,90 @@ const ScanSessions: React.FC = () => {
 
   if (loading) {
     return (
-      <Box display="flex" justifyContent="center" alignItems="center" minHeight="400px">
-        <CircularProgress />
+      <Box p={3}>
+        <Box display="flex" justifyContent="center" alignItems="center" minHeight="200px">
+          <CircularProgress />
+        </Box>
       </Box>
     );
   }
 
   return (
     <Box p={3}>
-      {/* <Box display="flex" justifyContent="space-between" alignItems="center" mb={3}>
-        <Typography variant="h4" component="h1">
-          Сессии сканирования
-        </Typography>
-        <Button
-          variant="contained"
-          color="primary"
-          startIcon={<StartIcon />}
-          onClick={() => setStartDialogOpen(true)}
-        >
+      <Box display="flex" justifyContent="space-between" alignItems="center" mb={3}>
+        <Typography variant="h4" component="h1">Сессии сканирования</Typography>
+        <Button variant="contained" color="primary" startIcon={<StartIcon />} onClick={() => setStartDialogOpen(true)}>
           Запустить сканирование
         </Button>
-      </Box> */}
+      </Box>
 
       {error && (
-        <Alert severity="error" sx={{ mb: 2 }}>
+        <Alert severity="error" sx={{ mb: 2 }} onClose={() => setError(null)}>
           {error}
         </Alert>
       )}
 
-      <TableContainer component={Paper}>
-        <Table>
-          <TableHead>
-            <TableRow>
-              <TableCell>ID</TableCell>
-              <TableCell>Контрагент</TableCell>
-              <TableCell>Статус</TableCell>
-              <TableCell>Страниц отсканировано</TableCell>
-              <TableCell>Страниц с нарушениями</TableCell>
-              <TableCell>Всего нарушений</TableCell>
-              <TableCell>Начало</TableCell>
-              <TableCell>Длительность</TableCell>
-              <TableCell>Тип</TableCell>
-              <TableCell>Действия</TableCell>
-            </TableRow>
-          </TableHead>
-          <TableBody>
-            {sessions.map((session) => (
-              <TableRow key={session.id}>
-                <TableCell>{session.id}</TableCell>
-                <TableCell>
-                  <Box>
-                    <Typography variant="body2" fontWeight="bold">
-                      {session.contractor_name}
-                    </Typography>
-                    <Typography variant="caption" color="textSecondary">
-                      {session.contractor_domain}
-                    </Typography>
-                  </Box>
-                </TableCell>
-                <TableCell>
-                  <Box display="flex" alignItems="center" gap={1}>
-                    {getStatusIcon(session.status)}
+      <Paper sx={{ width: '100%', overflow: 'hidden' }}>
+        <TableContainer>
+          <Table stickyHeader>
+            <TableHead>
+              <TableRow>
+                <TableCell>ID</TableCell>
+                <TableCell>Контрагент</TableCell>
+                <TableCell>Статус</TableCell>
+                <TableCell>Страниц отсканировано</TableCell>
+                <TableCell>Страниц с нарушениями</TableCell>
+                <TableCell>Нарушений</TableCell>
+                <TableCell>Начало</TableCell>
+                <TableCell>Длительность</TableCell>
+                <TableCell>Действия</TableCell>
+              </TableRow>
+            </TableHead>
+            <TableBody>
+              {sessions.map((session) => (
+                <TableRow key={session.id} hover>
+                  <TableCell>{session.id}</TableCell>
+                  <TableCell>
+                    <Box>
+                      <Typography variant="body2" fontWeight="bold">
+                        {session.contractor_name}
+                      </Typography>
+                      <Typography variant="body2" color="text.secondary">
+                        {session.contractor_domain}
+                      </Typography>
+                    </Box>
+                  </TableCell>
+                  <TableCell>
                     <Chip
+                      icon={getStatusIcon(session.status)}
                       label={session.status === 'running' ? 'Выполняется' : 
                              session.status === 'completed' ? 'Завершено' : 'Ошибка'}
                       color={getStatusColor(session.status) as any}
                       size="small"
                     />
-                  </Box>
-                  {session.error_message && (
-                    <Typography variant="caption" color="error" display="block" sx={{ mt: 0.5 }}>
-                      {session.error_message}
-                    </Typography>
-                  )}
-                </TableCell>
-                <TableCell>{session.pages_scanned}</TableCell>
-                <TableCell>{session.pages_with_violations}</TableCell>
-                <TableCell>{session.total_violations}</TableCell>
-                <TableCell>
-                  {new Date(session.started_at).toLocaleString('ru-RU')}
-                </TableCell>
-                <TableCell>
-                  <Box display="flex" alignItems="center" gap={1}>
-                    <TimerIcon fontSize="small" />
+                  </TableCell>
+                  <TableCell>{session.pages_scanned}</TableCell>
+                  <TableCell>
+                    <Chip
+                      label={session.pages_with_violations}
+                      color={session.pages_with_violations > 0 ? 'error' : 'default'}
+                      size="small"
+                    />
+                  </TableCell>
+                  <TableCell>
+                    <Chip
+                      label={session.total_violations}
+                      color={session.total_violations > 0 ? 'error' : 'default'}
+                      size="small"
+                    />
+                  </TableCell>
+                  <TableCell>
+                    {new Date(session.started_at).toLocaleString()}
+                  </TableCell>
+                  <TableCell>
                     {formatDuration(session.duration)}
-                  </Box>
-                </TableCell>
-                <TableCell>
-                  <Chip
-                    label="Обычное"
-                    color="default"
-                    size="small"
-                  />
-                </TableCell>
-                <TableCell>
-                  <Box display="flex" gap={1}>
+                  </TableCell>
+                  <TableCell>
                     <Tooltip title="Просмотр деталей">
                       <IconButton
                         size="small"
@@ -315,47 +380,58 @@ const ScanSessions: React.FC = () => {
                     <Tooltip title="Удалить сессию">
                       <IconButton
                         size="small"
-                        color="error"
                         onClick={() => handleDeleteSession(session.id)}
+                        color="error"
                       >
                         <DeleteIcon />
                       </IconButton>
                     </Tooltip>
-                  </Box>
-                </TableCell>
-              </TableRow>
-            ))}
-          </TableBody>
-        </Table>
-      </TableContainer>
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </TableContainer>
+        
+        {/* Пагинация */}
+        <Pagination
+          page={pagination.page}
+          pageSize={pagination.page_size}
+          totalItems={pagination.total_items}
+          totalPages={pagination.total_pages}
+          hasNext={pagination.has_next}
+          hasPrev={pagination.has_prev}
+          onPageChange={handlePageChange}
+          onPageSizeChange={handlePageSizeChange}
+        />
+      </Paper>
 
       {/* Диалог запуска сканирования */}
-      <Dialog open={startDialogOpen} onClose={() => setStartDialogOpen(false)} maxWidth="sm" fullWidth>
+      <Dialog open={startDialogOpen} onClose={() => setStartDialogOpen(false)}>
         <DialogTitle>Запуск сканирования</DialogTitle>
         <DialogContent>
-          <Box mb={2}>
-            <TextField
-              select
-              fullWidth
-              label="Контрагент"
-              value={selectedContractor || ''}
-              onChange={(e) => setSelectedContractor(Number(e.target.value))}
-              margin="normal"
-            >
-              {contractors.map((contractor) => (
-                <option key={contractor.id} value={contractor.id}>
-                  {contractor.name} ({contractor.domain})
-                </option>
-              ))}
-            </TextField>
-          </Box>
-                     {/* Принудительное пересканирование больше не нужно - любое сканирование создает новую сессию */}
+          <Typography variant="body2" sx={{ mb: 2 }}>
+            Выберите контрагента для сканирования:
+          </Typography>
+          <TextField
+            select
+            fullWidth
+            label="Контрагент"
+            value={selectedContractor || ''}
+            onChange={(e) => setSelectedContractor(Number(e.target.value))}
+          >
+            {contractors.map((contractor) => (
+              <option key={contractor.id} value={contractor.id}>
+                {contractor.name} ({contractor.domain})
+              </option>
+            ))}
+          </TextField>
         </DialogContent>
         <DialogActions>
           <Button onClick={() => setStartDialogOpen(false)}>Отмена</Button>
-          <Button
-            onClick={handleStartSession}
-            variant="contained"
+          <Button 
+            onClick={handleStartSession} 
+            variant="contained" 
             disabled={!selectedContractor}
           >
             Запустить
@@ -371,102 +447,142 @@ const ScanSessions: React.FC = () => {
         fullWidth
       >
         <DialogTitle>
-          Детали сессии сканирования #{selectedSession?.id}
+          Детали сессии #{selectedSession?.id} - {selectedSession?.contractor_name}
         </DialogTitle>
         <DialogContent>
           {selectedSession && (
             <Box>
-              <Grid container spacing={2} mb={3}>
-                <Grid item xs={12} md={6}>
-                  <Card>
-                    <CardContent>
-                      <Typography variant="h6" gutterBottom>
-                        Информация о сессии
-                      </Typography>
-                      <Typography><strong>Контрагент:</strong> {selectedSession.contractor_name}</Typography>
-                      <Typography><strong>Домен:</strong> {selectedSession.contractor_domain}</Typography>
-                      <Typography><strong>Статус:</strong> {selectedSession.status}</Typography>
-                      <Typography><strong>Начало:</strong> {new Date(selectedSession.started_at).toLocaleString('ru-RU')}</Typography>
-                      {selectedSession.completed_at && (
-                        <Typography><strong>Завершение:</strong> {new Date(selectedSession.completed_at).toLocaleString('ru-RU')}</Typography>
-                      )}
-                      <Typography><strong>Длительность:</strong> {formatDuration(selectedSession.duration)}</Typography>
-                    </CardContent>
-                  </Card>
+              <Grid container spacing={2} sx={{ mb: 3 }}>
+                <Grid item xs={6}>
+                  <Typography variant="body2" color="text.secondary">
+                    Контрагент:
+                  </Typography>
+                  <Typography variant="body1">{selectedSession.contractor_name}</Typography>
                 </Grid>
-                <Grid item xs={12} md={6}>
-                  <Card>
-                    <CardContent>
-                      <Typography variant="h6" gutterBottom>
-                        Статистика
-                      </Typography>
-                      <Typography><strong>Страниц отсканировано:</strong> {selectedSession.pages_scanned}</Typography>
-                      <Typography><strong>Страниц с нарушениями:</strong> {selectedSession.pages_with_violations}</Typography>
-                      <Typography><strong>Всего нарушений:</strong> {selectedSession.total_violations}</Typography>
-                      {selectedSession.error_message && (
-                        <Alert severity="error" sx={{ mt: 2 }}>
-                          <Typography variant="subtitle2" gutterBottom>
-                            <strong>Ошибка:</strong>
-                          </Typography>
-                          <Typography variant="body2">
-                            {selectedSession.error_message}
-                          </Typography>
-                        </Alert>
-                      )}
-                    </CardContent>
-                  </Card>
+                <Grid item xs={6}>
+                  <Typography variant="body2" color="text.secondary">
+                    Статус:
+                  </Typography>
+                  <Chip
+                    icon={getStatusIcon(selectedSession.status)}
+                    label={selectedSession.status === 'running' ? 'Выполняется' : 
+                           selectedSession.status === 'completed' ? 'Завершено' : 'Ошибка'}
+                    color={getStatusColor(selectedSession.status) as any}
+                    size="small"
+                  />
+                </Grid>
+                <Grid item xs={6}>
+                  <Typography variant="body2" color="text.secondary">
+                    Начало:
+                  </Typography>
+                  <Typography variant="body1">
+                    {new Date(selectedSession.started_at).toLocaleString()}
+                  </Typography>
+                </Grid>
+                <Grid item xs={6}>
+                  <Typography variant="body2" color="text.secondary">
+                    Длительность:
+                  </Typography>
+                  <Typography variant="body1">
+                    {formatDuration(selectedSession.duration)}
+                  </Typography>
+                </Grid>
+                <Grid item xs={4}>
+                  <Typography variant="body2" color="text.secondary">
+                    Страниц отсканировано:
+                  </Typography>
+                  <Typography variant="body1">{selectedSession.pages_scanned}</Typography>
+                </Grid>
+                <Grid item xs={4}>
+                  <Typography variant="body2" color="text.secondary">
+                    Страниц с нарушениями:
+                  </Typography>
+                  <Typography variant="body1" color="error">
+                    {selectedSession.pages_with_violations}
+                  </Typography>
+                </Grid>
+                <Grid item xs={4}>
+                  <Typography variant="body2" color="text.secondary">
+                    Всего нарушений:
+                  </Typography>
+                  <Typography variant="body1" color="error">
+                    {selectedSession.total_violations}
+                  </Typography>
                 </Grid>
               </Grid>
+
+              {selectedSession.error_message && (
+                <Alert severity="error" sx={{ mb: 2 }}>
+                  {selectedSession.error_message}
+                </Alert>
+              )}
 
               <Typography variant="h6" gutterBottom>
                 Страницы ({selectedSession.pages.length})
               </Typography>
-              <TableContainer component={Paper}>
-                <Table size="small">
-                  <TableHead>
-                    <TableRow>
-                      <TableCell>URL</TableCell>
-                      <TableCell>Заголовок</TableCell>
-                      <TableCell>Статус</TableCell>
-                      <TableCell>Нарушения</TableCell>
-                      <TableCell>Последнее сканирование</TableCell>
-                    </TableRow>
-                  </TableHead>
-                  <TableBody>
-                    {selectedSession.pages.map((page) => (
-                      <TableRow key={page.id}>
-                        <TableCell>
-                          <a href={page.url} target="_blank" rel="noopener noreferrer">
-                            {page.url}
-                          </a>
-                        </TableCell>
-                        <TableCell>{page.title || '-'}</TableCell>
-                        <TableCell>
-                          <Chip
-                            label={page.status}
-                            color={page.status === 'completed' ? 'success' : 'warning'}
-                            size="small"
-                          />
-                        </TableCell>
-                        <TableCell>
-                          {page.violations_found ? (
+              
+              <Paper sx={{ width: '100%', overflow: 'hidden' }}>
+                <TableContainer>
+                  <Table>
+                    <TableHead>
+                      <TableRow>
+                        <TableCell>URL</TableCell>
+                        <TableCell>Статус</TableCell>
+                        <TableCell>HTTP</TableCell>
+                        <TableCell>Время ответа</TableCell>
+                        <TableCell>Нарушения</TableCell>
+                        <TableCell>Последнее сканирование</TableCell>
+                      </TableRow>
+                    </TableHead>
+                    <TableBody>
+                      {selectedSession.pages.map((page) => (
+                        <TableRow key={page.id} hover>
+                          <TableCell>
+                            <Typography variant="body2" sx={{ wordBreak: 'break-all' }}>
+                              {page.url}
+                            </Typography>
+                          </TableCell>
+                          <TableCell>
                             <Chip
-                              label={`${page.violations_count} нарушений`}
-                              color="error"
+                              label={page.status}
+                              color={page.status === 'success' ? 'success' : 'error'}
                               size="small"
                             />
-                          ) : (
-                            <Chip label="Нет нарушений" color="success" size="small" />
-                          )}
-                        </TableCell>
-                        <TableCell>
-                          {page.last_scanned ? new Date(page.last_scanned).toLocaleString('ru-RU') : '-'}
-                        </TableCell>
-                      </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
-              </TableContainer>
+                          </TableCell>
+                          <TableCell>{page.http_status || '-'}</TableCell>
+                          <TableCell>{page.response_time ? `${page.response_time}ms` : '-'}</TableCell>
+                          <TableCell>
+                            <Chip
+                              label={page.violations_count}
+                              color={page.violations_count > 0 ? 'error' : 'default'}
+                              size="small"
+                            />
+                          </TableCell>
+                          <TableCell>
+                            {page.last_scanned
+                              ? new Date(page.last_scanned).toLocaleString()
+                              : '-'}
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </TableContainer>
+                
+                {/* Пагинация для страниц сессии */}
+                {selectedSession.pagination && (
+                  <Pagination
+                    page={selectedSession.pagination.page}
+                    pageSize={selectedSession.pagination.page_size}
+                    totalItems={selectedSession.pagination.total_items}
+                    totalPages={selectedSession.pagination.total_pages}
+                    hasNext={selectedSession.pagination.has_next}
+                    hasPrev={selectedSession.pagination.has_prev}
+                    onPageChange={handleSessionPageChange}
+                    onPageSizeChange={handleSessionPageSizeChange}
+                  />
+                )}
+              </Paper>
             </Box>
           )}
         </DialogContent>

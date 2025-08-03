@@ -32,6 +32,8 @@ import {
 } from '@mui/icons-material';
 import { useNavigate } from 'react-router-dom';
 import axios from 'axios';
+import Pagination from '../components/Pagination';
+import { API_ENDPOINTS } from '../config/api';
 
 interface Contractor {
   id: number;
@@ -62,6 +64,15 @@ interface ContractorFormData {
   max_depth: number | null;
 }
 
+interface PaginationData {
+  page: number;
+  page_size: number;
+  total_items: number;
+  total_pages: number;
+  has_next: boolean;
+  has_prev: boolean;
+}
+
 const Contractors: React.FC = () => {
   const navigate = useNavigate();
   const [contractors, setContractors] = useState<Contractor[]>([]);
@@ -78,6 +89,14 @@ const Contractors: React.FC = () => {
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
   const [fetching, setFetching] = useState(false);
+  const [pagination, setPagination] = useState<PaginationData>({
+    page: 1,
+    page_size: 20,
+    total_items: 0,
+    total_pages: 0,
+    has_next: false,
+    has_prev: false,
+  });
 
   const api = axios.create({
     baseURL: process.env.REACT_APP_API_URL || 'https://localhost/api',
@@ -97,18 +116,42 @@ const Contractors: React.FC = () => {
 
   useEffect(() => {
     fetchContractors();
-  }, []);
+  }, [pagination.page, pagination.page_size]);
 
   const fetchContractors = async () => {
-    setFetching(true);
     try {
-      const response = await api.get('/v1/contractors/');
-      setContractors(response.data);
-    } catch (error: any) {
-      setError(error.response?.data?.detail || 'Ошибка загрузки контрагентов');
+      setFetching(true);
+      const response = await api.get(API_ENDPOINTS.CONTRACTORS.LIST, {
+        params: {
+          page: pagination.page,
+          page_size: pagination.page_size,
+        },
+      });
+      
+      if (response.data.items) {
+        setContractors(response.data.items);
+        setPagination(prev => ({
+          ...prev,
+          ...response.data.pagination,
+        }));
+      } else {
+        // Fallback for old API format
+        setContractors(response.data);
+      }
+    } catch (err: any) {
+      console.error('Error fetching contractors:', err);
+      setError(err.response?.data?.detail || 'Ошибка загрузки данных');
     } finally {
       setFetching(false);
     }
+  };
+
+  const handlePageChange = (page: number) => {
+    setPagination(prev => ({ ...prev, page }));
+  };
+
+  const handlePageSizeChange = (pageSize: number) => {
+    setPagination(prev => ({ ...prev, page: 1, page_size: pageSize }));
   };
 
   const handleOpenDialog = (contractor?: Contractor) => {
@@ -134,40 +177,39 @@ const Contractors: React.FC = () => {
       });
     }
     setOpenDialog(true);
-    setError('');
   };
 
   const handleCloseDialog = () => {
     setOpenDialog(false);
     setEditingContractor(null);
-    setError('');
+    setFormData({
+      name: '',
+      domain: '',
+      description: '',
+      check_schedule: 'daily',
+      max_pages: 100,
+      max_depth: 3,
+    });
   };
 
   const handleSubmit = async () => {
-    setLoading(true);
-    setError('');
+    if (!formData.name || !formData.domain) {
+      setError('Пожалуйста, заполните обязательные поля');
+      return;
+    }
 
     try {
+      setLoading(true);
       if (editingContractor) {
-        // Обновление контрагента
-        const updateData = {
-          name: formData.name,
-          description: formData.description,
-          check_schedule: formData.check_schedule,
-          max_pages: formData.max_pages,
-          max_depth: formData.max_depth,
-        };
-        
-        await api.put(`/v1/contractors/${editingContractor.id}`, updateData);
+        await api.put(API_ENDPOINTS.CONTRACTORS.UPDATE(editingContractor.id), formData);
       } else {
-        // Создание нового контрагента
-        await api.post('/v1/contractors/', formData);
+        await api.post(API_ENDPOINTS.CONTRACTORS.CREATE, formData);
       }
-      
       handleCloseDialog();
       fetchContractors();
-    } catch (error: any) {
-      setError(error.response?.data?.detail || 'Ошибка сохранения контрагента');
+    } catch (err: any) {
+      console.error('Error saving contractor:', err);
+      setError(err.response?.data?.detail || 'Ошибка сохранения контрагента');
     } finally {
       setLoading(false);
     }
@@ -179,33 +221,22 @@ const Contractors: React.FC = () => {
     }
 
     try {
-      await api.delete(`/v1/contractors/${contractorId}`);
+      await api.delete(API_ENDPOINTS.CONTRACTORS.DELETE(contractorId));
       fetchContractors();
-    } catch (error: any) {
-      setError(error.response?.data?.detail || 'Ошибка удаления контрагента');
+    } catch (err: any) {
+      console.error('Error deleting contractor:', err);
+      setError(err.response?.data?.detail || 'Ошибка удаления контрагента');
     }
   };
 
   const handleStartScan = async (contractorId: number) => {
     try {
-      await api.post(`/v1/contractors/${contractorId}/scan`);
-      alert('Сканирование запущено');
-      fetchContractors(); // Обновляем список
-    } catch (error: any) {
-      setError(error.response?.data?.detail || 'Ошибка запуска сканирования');
-    }
-  };
-
-  const handleRescan = async (contractorId: number) => {
-    if (!window.confirm('Вы уверены, что хотите запустить пересканирование для этого контрагента?')) {
-      return;
-    }
-    try {
-      await api.post(`/v1/contractors/${contractorId}/rescan`);
-      alert('Пересканирование запущено');
-      fetchContractors(); // Обновляем список
-    } catch (error: any) {
-      setError(error.response?.data?.detail || 'Ошибка запуска пересканирования');
+      await api.post(API_ENDPOINTS.CONTRACTORS.SCAN(contractorId));
+      // Обновляем список контрагентов после запуска сканирования
+      fetchContractors();
+    } catch (err: any) {
+      console.error('Error starting scan:', err);
+      setError(err.response?.data?.detail || 'Ошибка запуска сканирования');
     }
   };
 
@@ -213,14 +244,23 @@ const Contractors: React.FC = () => {
     navigate(`/contractors/${contractorId}/pages`);
   };
 
+  if (fetching) {
+    return (
+      <Box p={3}>
+        <Box display="flex" justifyContent="center" alignItems="center" minHeight="200px">
+          <Typography>Загрузка контрагентов...</Typography>
+        </Box>
+      </Box>
+    );
+  }
+
   return (
-    <Box>
+    <Box p={3}>
       <Box display="flex" justifyContent="space-between" alignItems="center" mb={3}>
-        <Typography variant="h4">
-          Контрагенты
-        </Typography>
+        <Typography variant="h4" component="h1">Контрагенты</Typography>
         <Button
           variant="contained"
+          color="primary"
           startIcon={<AddIcon />}
           onClick={() => handleOpenDialog()}
         >
@@ -229,175 +269,184 @@ const Contractors: React.FC = () => {
       </Box>
 
       {error && (
-        <Alert severity="error" sx={{ mb: 2 }}>
+        <Alert severity="error" sx={{ mb: 2 }} onClose={() => setError('')}>
           {error}
         </Alert>
       )}
 
-      <TableContainer component={Paper}>
-        <Table>
-          <TableHead>
-            <TableRow>
-              <TableCell>Название</TableCell>
-              <TableCell>Домен</TableCell>
-              <TableCell>Статус</TableCell>
-              <TableCell>Страницы</TableCell>
-              <TableCell>Нарушения</TableCell>
-              <TableCell>Последняя проверка</TableCell>
-              <TableCell>MCC код</TableCell>
-              <TableCell>Действия</TableCell>
-            </TableRow>
-          </TableHead>
-          <TableBody>
-            {fetching ? (
+      <Paper sx={{ width: '100%', overflow: 'hidden' }}>
+        <TableContainer>
+          <Table stickyHeader>
+            <TableHead>
               <TableRow>
-                <TableCell colSpan={8} align="center">
-                  <Typography color="textSecondary">
-                    Загрузка...
-                  </Typography>
-                </TableCell>
+                <TableCell>ID</TableCell>
+                <TableCell>Название</TableCell>
+                <TableCell>Домен</TableCell>
+                <TableCell>Статус</TableCell>
+                <TableCell>Всего страниц</TableCell>
+                <TableCell>Отсканировано</TableCell>
+                <TableCell>Нарушений</TableCell>
+                <TableCell>Последняя проверка</TableCell>
+                <TableCell>Действия</TableCell>
               </TableRow>
-            ) : contractors.length === 0 ? (
-              <TableRow>
-                <TableCell colSpan={8} align="center">
-                  <Typography color="textSecondary">
-                    Контрагенты не найдены. Добавьте первого контрагента.
-                  </Typography>
-                </TableCell>
-              </TableRow>
-            ) : (
-              contractors.map((contractor) => (
-                <TableRow key={contractor.id}>
-                  <TableCell>{contractor.name}</TableCell>
+            </TableHead>
+            <TableBody>
+              {contractors.map((contractor) => (
+                <TableRow key={contractor.id} hover>
+                  <TableCell>{contractor.id}</TableCell>
+                  <TableCell>
+                    <Box>
+                      <Typography variant="body2" fontWeight="bold">
+                        {contractor.name}
+                      </Typography>
+                      {contractor.description && (
+                        <Typography variant="body2" color="text.secondary">
+                          {contractor.description}
+                        </Typography>
+                      )}
+                    </Box>
+                  </TableCell>
                   <TableCell>{contractor.domain}</TableCell>
                   <TableCell>
-                    <Typography
-                      variant="body2"
-                      color={contractor.is_active ? 'success.main' : 'error.main'}
-                    >
-                      {contractor.is_active ? 'Активен' : 'Неактивен'}
-                    </Typography>
+                    <Box
+                      sx={{
+                        width: 8,
+                        height: 8,
+                        borderRadius: '50%',
+                        backgroundColor: contractor.is_active ? 'success.main' : 'error.main',
+                        display: 'inline-block',
+                        mr: 1,
+                      }}
+                    />
+                    {contractor.is_active ? 'Активен' : 'Неактивен'}
+                  </TableCell>
+                  <TableCell>{contractor.total_pages || 0}</TableCell>
+                  <TableCell>{contractor.scanned_pages || 0}</TableCell>
+                  <TableCell>
+                    <Box display="flex" alignItems="center" gap={1}>
+                      <Typography variant="body2" color="error">
+                        {contractor.violations_found || 0}
+                      </Typography>
+                    </Box>
                   </TableCell>
                   <TableCell>
-                    {contractor.scanned_pages}/{contractor.total_pages}
+                    {contractor.last_check
+                      ? new Date(contractor.last_check).toLocaleString()
+                      : 'Никогда'}
                   </TableCell>
                   <TableCell>
-                    <Typography
-                      variant="body2"
-                      color={contractor.violations_found > 0 ? 'error.main' : 'success.main'}
-                    >
-                      {contractor.violations_found}
-                    </Typography>
-                  </TableCell>
-                  <TableCell>
-                    {contractor.last_check 
-                      ? new Date(contractor.last_check).toLocaleDateString()
-                      : 'Не проверялся'
-                    }
-                  </TableCell>
-                  <TableCell>
-                    {contractor.mcc_code || '-'}
-                  </TableCell>
-                  <TableCell>
-                    <IconButton
-                      size="small"
-                      onClick={() => handleOpenDialog(contractor)}
-                    >
-                      <EditIcon />
-                    </IconButton>
-                    <IconButton
-                      size="small"
-                      color="primary"
-                      onClick={() => handleStartScan(contractor.id)}
-                      title="Запустить сканирование"
-                    >
-                      <ScanIcon />
-                    </IconButton>
-                    <IconButton
-                      size="small"
-                      color="info"
-                      onClick={() => handleViewPages(contractor.id)}
-                      title="Просмотр страниц"
-                    >
-                      <ViewPagesIcon />
-                    </IconButton>
-                    <IconButton
-                      size="small"
-                      color="error"
-                      onClick={() => handleDeleteContractor(contractor.id)}
-                    >
-                      <DeleteIcon />
-                    </IconButton>
+                    <Box display="flex" gap={1}>
+                      <IconButton
+                        size="small"
+                        onClick={() => handleStartScan(contractor.id)}
+                        title="Запустить сканирование"
+                      >
+                        <ScanIcon />
+                      </IconButton>
+                      <IconButton
+                        size="small"
+                        onClick={() => handleViewPages(contractor.id)}
+                        title="Просмотр страниц"
+                      >
+                        <ViewPagesIcon />
+                      </IconButton>
+                      <IconButton
+                        size="small"
+                        onClick={() => handleOpenDialog(contractor)}
+                        title="Редактировать"
+                      >
+                        <EditIcon />
+                      </IconButton>
+                      <IconButton
+                        size="small"
+                        onClick={() => handleDeleteContractor(contractor.id)}
+                        title="Удалить"
+                        color="error"
+                      >
+                        <DeleteIcon />
+                      </IconButton>
+                    </Box>
                   </TableCell>
                 </TableRow>
-              ))
-            )}
-          </TableBody>
-        </Table>
-      </TableContainer>
+              ))}
+            </TableBody>
+          </Table>
+        </TableContainer>
+        
+        {/* Пагинация */}
+        <Pagination
+          page={pagination.page}
+          pageSize={pagination.page_size}
+          totalItems={pagination.total_items}
+          totalPages={pagination.total_pages}
+          hasNext={pagination.has_next}
+          hasPrev={pagination.has_prev}
+          onPageChange={handlePageChange}
+          onPageSizeChange={handlePageSizeChange}
+        />
+      </Paper>
 
+      {/* Диалог добавления/редактирования контрагента */}
       <Dialog open={openDialog} onClose={handleCloseDialog} maxWidth="sm" fullWidth>
         <DialogTitle>
           {editingContractor ? 'Редактировать контрагента' : 'Добавить контрагента'}
         </DialogTitle>
         <DialogContent>
-          <TextField
-            fullWidth
-            label="Название"
-            value={formData.name}
-            onChange={(e) => setFormData({ ...formData, name: e.target.value })}
-            margin="normal"
-            required
-          />
-          <TextField
-            fullWidth
-            label="Домен"
-            value={formData.domain}
-            onChange={(e) => setFormData({ ...formData, domain: e.target.value })}
-            margin="normal"
-            required
-            placeholder="example.com"
-            disabled={!!editingContractor}
-          />
-          <TextField
-            fullWidth
-            label="Описание"
-            value={formData.description}
-            onChange={(e) => setFormData({ ...formData, description: e.target.value })}
-            margin="normal"
-            multiline
-            rows={3}
-          />
-          <FormControl fullWidth margin="normal">
-            <InputLabel>Расписание проверок</InputLabel>
-            <Select
-              value={formData.check_schedule}
-              onChange={(e) => setFormData({ ...formData, check_schedule: e.target.value })}
-              label="Расписание проверок"
-            >
-              <MenuItem value="daily">Ежедневно</MenuItem>
-              <MenuItem value="weekly">Еженедельно</MenuItem>
-              <MenuItem value="monthly">Ежемесячно</MenuItem>
-            </Select>
-          </FormControl>
-          <TextField
-            fullWidth
-            label="Максимум страниц"
-            type="number"
-            value={formData.max_pages || ''}
-            onChange={(e) => setFormData({ ...formData, max_pages: parseInt(e.target.value) || null })}
-            margin="normal"
-            inputProps={{ min: 1, max: 1000 }}
-          />
-          <TextField
-            fullWidth
-            label="Максимальная глубина"
-            type="number"
-            value={formData.max_depth || ''}
-            onChange={(e) => setFormData({ ...formData, max_depth: parseInt(e.target.value) || null })}
-            margin="normal"
-            inputProps={{ min: 1, max: 10 }}
-          />
+          <Box sx={{ pt: 1 }}>
+            <TextField
+              fullWidth
+              label="Название *"
+              value={formData.name}
+              onChange={(e) => setFormData({ ...formData, name: e.target.value })}
+              margin="normal"
+            />
+            <TextField
+              fullWidth
+              label="Домен *"
+              value={formData.domain}
+              onChange={(e) => setFormData({ ...formData, domain: e.target.value })}
+              margin="normal"
+              placeholder="example.com"
+            />
+            <TextField
+              fullWidth
+              label="Описание"
+              value={formData.description}
+              onChange={(e) => setFormData({ ...formData, description: e.target.value })}
+              margin="normal"
+              multiline
+              rows={3}
+            />
+            <FormControl fullWidth margin="normal">
+              <InputLabel>Расписание проверок</InputLabel>
+              <Select
+                value={formData.check_schedule}
+                onChange={(e) => setFormData({ ...formData, check_schedule: e.target.value })}
+                label="Расписание проверок"
+              >
+                <MenuItem value="daily">Ежедневно</MenuItem>
+                <MenuItem value="weekly">Еженедельно</MenuItem>
+                <MenuItem value="monthly">Ежемесячно</MenuItem>
+                <MenuItem value="never">Никогда</MenuItem>
+              </Select>
+            </FormControl>
+            <TextField
+              fullWidth
+              label="Максимум страниц"
+              type="number"
+              value={formData.max_pages || ''}
+              onChange={(e) => setFormData({ ...formData, max_pages: e.target.value ? Number(e.target.value) : null })}
+              margin="normal"
+            />
+            <TextField
+              fullWidth
+              label="Максимальная глубина"
+              type="number"
+              value={formData.max_depth || ''}
+              onChange={(e) => setFormData({ ...formData, max_depth: e.target.value ? Number(e.target.value) : null })}
+              margin="normal"
+            />
+          </Box>
         </DialogContent>
         <DialogActions>
           <Button onClick={handleCloseDialog}>Отмена</Button>
@@ -406,7 +455,7 @@ const Contractors: React.FC = () => {
             variant="contained"
             disabled={loading}
           >
-            {loading ? 'Сохранение...' : 'Сохранить'}
+            {loading ? 'Сохранение...' : editingContractor ? 'Сохранить' : 'Добавить'}
           </Button>
         </DialogActions>
       </Dialog>

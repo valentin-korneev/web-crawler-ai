@@ -35,6 +35,7 @@ import {
 } from '@mui/icons-material';
 import { api } from '../services/api';
 import { API_ENDPOINTS } from '../config/api';
+import Pagination from '../components/Pagination';
 
 interface Violation {
   id: number;
@@ -70,6 +71,15 @@ interface ScanResult {
   violations: Violation[];
 }
 
+interface PaginationData {
+  page: number;
+  page_size: number;
+  total_items: number;
+  total_pages: number;
+  has_next: boolean;
+  has_prev: boolean;
+}
+
 const ScanResults: React.FC = () => {
   const [results, setResults] = useState<ScanResult[]>([]);
   const [loading, setLoading] = useState(true);
@@ -78,23 +88,54 @@ const ScanResults: React.FC = () => {
   const [detailsDialogOpen, setDetailsDialogOpen] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
   const [filterSeverity, setFilterSeverity] = useState<string>('all');
+  const [pagination, setPagination] = useState<PaginationData>({
+    page: 1,
+    page_size: 20,
+    total_items: 0,
+    total_pages: 0,
+    has_next: false,
+    has_prev: false,
+  });
 
   useEffect(() => {
     fetchData();
-  }, []);
+  }, [pagination.page, pagination.page_size]);
 
   const fetchData = async () => {
     try {
       setLoading(true);
-      const response = await api.get(API_ENDPOINTS.SCAN_RESULTS.LIST);
+      const response = await api.get(API_ENDPOINTS.SCAN_RESULTS.LIST, {
+        params: {
+          page: pagination.page,
+          page_size: pagination.page_size,
+        },
+      });
       console.log('Scan results response:', response.data);
-      setResults(response.data);
+      
+      if (response.data.items) {
+        setResults(response.data.items);
+        setPagination(prev => ({
+          ...prev,
+          ...response.data.pagination,
+        }));
+      } else {
+        // Fallback for old API format
+        setResults(response.data);
+      }
     } catch (err: any) {
       console.error('Error fetching scan results:', err);
       setError(err.response?.data?.detail || 'Ошибка загрузки данных');
     } finally {
       setLoading(false);
     }
+  };
+
+  const handlePageChange = (page: number) => {
+    setPagination(prev => ({ ...prev, page }));
+  };
+
+  const handlePageSizeChange = (pageSize: number) => {
+    setPagination(prev => ({ ...prev, page: 1, page_size: pageSize }));
   };
 
   const handleViewDetails = (result: ScanResult) => {
@@ -214,7 +255,7 @@ const ScanResults: React.FC = () => {
         <Grid item xs={12} sm={3}>
           <Card>
             <CardContent>
-              <Typography variant="h6">{results.length}</Typography>
+              <Typography variant="h6">{pagination.total_items}</Typography>
               <Typography variant="body2" color="text.secondary">
                 Всего страниц с нарушениями
               </Typography>
@@ -352,6 +393,18 @@ const ScanResults: React.FC = () => {
             </TableBody>
           </Table>
         </TableContainer>
+        
+        {/* Пагинация */}
+        <Pagination
+          page={pagination.page}
+          pageSize={pagination.page_size}
+          totalItems={pagination.total_items}
+          totalPages={pagination.total_pages}
+          hasNext={pagination.has_next}
+          hasPrev={pagination.has_prev}
+          onPageChange={handlePageChange}
+          onPageSizeChange={handlePageSizeChange}
+        />
       </Paper>
 
       {/* Диалог с деталями нарушений */}

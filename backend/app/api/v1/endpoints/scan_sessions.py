@@ -1,5 +1,5 @@
-from fastapi import APIRouter, Depends, HTTPException
-from typing import List, Optional
+from fastapi import APIRouter, Depends, HTTPException, Query
+from typing import List, Optional, Dict, Any
 from datetime import datetime
 from app.models.user import User
 from app.models.contractor import Contractor
@@ -16,8 +16,10 @@ router = APIRouter()
 async def get_scan_sessions(
     contractor_id: Optional[int] = None,
     status: Optional[str] = None,
+    page: int = Query(1, ge=1, description="Номер страницы"),
+    page_size: int = Query(20, ge=1, le=100, description="Размер страницы"),
     current_user: User = Depends(get_current_user)
-):
+) -> Dict[str, Any]:
     """Получение списка сессий сканирования"""
     try:
         query = ScanSession.all().prefetch_related('contractor')
@@ -27,25 +29,44 @@ async def get_scan_sessions(
         if status:
             query = query.filter(status=status)
         
-        sessions = await query.order_by('-id')
+        # Подсчитываем общее количество сессий
+        total_sessions = await query.count()
         
-        return [
-            {
-                "id": session.id,
-                "contractor_id": session.contractor.id,
-                "contractor_name": session.contractor.name,
-                "contractor_domain": session.contractor.domain,
-                "status": session.status,
-                "pages_scanned": session.pages_scanned,
-                "pages_with_violations": session.pages_with_violations,
-                "total_violations": session.total_violations,
-                "started_at": session.started_at.isoformat() if session.started_at else None,
-                "completed_at": session.completed_at.isoformat() if session.completed_at else None,
-                "duration": session.duration,
-                "error_message": session.error_message,
+        # Вычисляем смещение для пагинации
+        offset = (page - 1) * page_size
+        
+        sessions = await query.order_by('-id').offset(offset).limit(page_size)
+        
+        # Вычисляем общее количество страниц
+        total_pages = (total_sessions + page_size - 1) // page_size
+        
+        return {
+            "items": [
+                {
+                    "id": session.id,
+                    "contractor_id": session.contractor.id,
+                    "contractor_name": session.contractor.name,
+                    "contractor_domain": session.contractor.domain,
+                    "status": session.status,
+                    "pages_scanned": session.pages_scanned,
+                    "pages_with_violations": session.pages_with_violations,
+                    "total_violations": session.total_violations,
+                    "started_at": session.started_at.isoformat() if session.started_at else None,
+                    "completed_at": session.completed_at.isoformat() if session.completed_at else None,
+                    "duration": session.duration,
+                    "error_message": session.error_message,
+                }
+                for session in sessions
+            ],
+            "pagination": {
+                "page": page,
+                "page_size": page_size,
+                "total_items": total_sessions,
+                "total_pages": total_pages,
+                "has_next": page < total_pages,
+                "has_prev": page > 1
             }
-            for session in sessions
-        ]
+        }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error getting scan sessions: {str(e)}")
 
@@ -53,30 +74,38 @@ async def get_scan_sessions(
 @router.get("/{session_id}")
 async def get_scan_session(
     session_id: int,
+    page: int = Query(1, ge=1, description="Номер страницы"),
+    page_size: int = Query(20, ge=1, le=100, description="Размер страницы"),
     current_user: User = Depends(get_current_user)
-):
+) -> Dict[str, Any]:
     """Получение деталей сессии сканирования"""
     try:
         session = await ScanSession.get_or_none(id=session_id).prefetch_related('contractor')
         if not session:
             raise HTTPException(status_code=404, detail="Scan session not found")
         
-        # Получаем страницы для этой сессии
-        pages = await WebPage.filter(scan_session=session).order_by('-id')
+        # Подсчитываем общее количество страниц для этой сессии
+        total_pages = await WebPage.filter(scan_session=session).count()
+        
+        # Вычисляем смещение для пагинации
+        offset = (page - 1) * page_size
+        
+        # Получаем страницы для этой сессии с пагинацией
+        pages = await WebPage.filter(scan_session=session).order_by('-id').offset(offset).limit(page_size)
         
         pages_data = []
-        for page in pages:
-            violations = await Violation.filter(webpage=page).prefetch_related('forbidden_word')
+        for page_obj in pages:
+            violations = await Violation.filter(webpage=page_obj).prefetch_related('forbidden_word')
             pages_data.append({
-                "id": page.id,
-                "url": page.url,
-                "title": page.title,
-                "status": page.status,
-                "http_status": page.http_status,
-                "response_time": page.response_time,
-                "violations_found": page.violations_found,
-                "violations_count": page.violations_count,
-                "last_scanned": page.last_scanned.isoformat() if page.last_scanned else None,
+                "id": page_obj.id,
+                "url": page_obj.url,
+                "title": page_obj.title,
+                "status": page_obj.status,
+                "http_status": page_obj.http_status,
+                "response_time": page_obj.response_time,
+                "violations_found": page_obj.violations_found,
+                "violations_count": page_obj.violations_count,
+                "last_scanned": page_obj.last_scanned.isoformat() if page_obj.last_scanned else None,
                 "violations": [
                     {
                         "id": v.id,
@@ -91,6 +120,9 @@ async def get_scan_session(
                 ]
             })
         
+        # Вычисляем общее количество страниц
+        total_pages_count = (total_pages + page_size - 1) // page_size
+        
         return {
             "id": session.id,
             "contractor_id": session.contractor.id,
@@ -104,7 +136,15 @@ async def get_scan_session(
             "completed_at": session.completed_at.isoformat() if session.completed_at else None,
             "duration": session.duration,
             "error_message": session.error_message,
-            "pages": pages_data
+            "pages": pages_data,
+            "pagination": {
+                "page": page,
+                "page_size": page_size,
+                "total_items": total_pages,
+                "total_pages": total_pages_count,
+                "has_next": page < total_pages_count,
+                "has_prev": page > 1
+            }
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error getting scan session: {str(e)}")

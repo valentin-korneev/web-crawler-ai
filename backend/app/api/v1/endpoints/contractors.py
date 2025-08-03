@@ -1,5 +1,5 @@
-from fastapi import APIRouter, Depends, HTTPException
-from typing import List
+from fastapi import APIRouter, Depends, HTTPException, Query
+from typing import List, Optional, Dict, Any
 from app.models.contractor import Contractor
 from app.models.scan_session import ScanSession
 from app.models.user import User
@@ -15,11 +15,22 @@ from tortoise.functions import Sum
 router = APIRouter()
 
 
-@router.get("/", response_model=List[ContractorResponse])
-async def get_contractors(current_user: User = Depends(get_current_user)):
+@router.get("/")
+async def get_contractors(
+    page: int = Query(1, ge=1, description="Номер страницы"),
+    page_size: int = Query(20, ge=1, le=100, description="Размер страницы"),
+    current_user: User = Depends(get_current_user)
+) -> Dict[str, Any]:
     """Получение списка контрагентов"""
-    contractors = await Contractor.all().order_by('id')
+    # Подсчитываем общее количество контрагентов
+    total_contractors = await Contractor.all().count()
+    
+    # Вычисляем смещение для пагинации
+    offset = (page - 1) * page_size
+    
+    contractors = await Contractor.all().order_by('id').offset(offset).limit(page_size)
     contractors_response = [ContractorResponse.from_orm(contractor) for contractor in contractors]
+    
     for contractor in contractors_response:
         result = await ScanSession.filter(
             contractor_id=contractor.id
@@ -32,7 +43,21 @@ async def get_contractors(current_user: User = Depends(get_current_user)):
         contractor.total_pages = result[0].get('pages_scanned')
         contractor.scanned_pages = result[0].get('pages_with_violations')
         contractor.violations_found = result[0].get('total_violations')
-    return contractors_response
+    
+    # Вычисляем общее количество страниц
+    total_pages = (total_contractors + page_size - 1) // page_size
+    
+    return {
+        "items": contractors_response,
+        "pagination": {
+            "page": page,
+            "page_size": page_size,
+            "total_items": total_contractors,
+            "total_pages": total_pages,
+            "has_next": page < total_pages,
+            "has_prev": page > 1
+        }
+    }
 
 @router.post("/", response_model=ContractorResponse)
 async def create_contractor(
@@ -121,30 +146,54 @@ async def start_scan(contractor_id: int, current_user: User = Depends(get_curren
     }
 
 @router.get("/{contractor_id}/pages")
-async def get_contractor_pages(contractor_id: int, current_user: User = Depends(get_current_user)):
+async def get_contractor_pages(
+    contractor_id: int, 
+    page: int = Query(1, ge=1, description="Номер страницы"),
+    page_size: int = Query(20, ge=1, le=100, description="Размер страницы"),
+    current_user: User = Depends(get_current_user)
+) -> Dict[str, Any]:
     """Получение страниц контрагента"""
     contractor = await Contractor.get_or_none(id=contractor_id)
     if not contractor:
         raise HTTPException(status_code=404, detail="Contractor not found")
     
-    pages = await WebPage.filter(contractor=contractor).order_by('-id')
+    # Подсчитываем общее количество страниц для контрагента
+    total_pages = await WebPage.filter(contractor=contractor).count()
     
-    return [
-        {
-            "id": page.id,
-            "url": page.url,
-            "title": page.title,
-            "meta_description": page.meta_description,
-            "status": page.status,
-            "http_status": page.http_status,
-            "response_time": page.response_time,
-            "violations_found": page.violations_found,
-            "violations_count": page.violations_count,
-            "last_scanned": page.last_scanned.isoformat() if page.last_scanned else None,
-            "created_at": page.created_at.isoformat() if page.created_at else None
+    # Вычисляем смещение для пагинации
+    offset = (page - 1) * page_size
+    
+    pages = await WebPage.filter(contractor=contractor).order_by('-id').offset(offset).limit(page_size)
+    
+    # Вычисляем общее количество страниц
+    total_pages_count = (total_pages + page_size - 1) // page_size
+    
+    return {
+        "items": [
+            {
+                "id": page_obj.id,
+                "url": page_obj.url,
+                "title": page_obj.title,
+                "meta_description": page_obj.meta_description,
+                "status": page_obj.status,
+                "http_status": page_obj.http_status,
+                "response_time": page_obj.response_time,
+                "violations_found": page_obj.violations_found,
+                "violations_count": page_obj.violations_count,
+                "last_scanned": page_obj.last_scanned.isoformat() if page_obj.last_scanned else None,
+                "created_at": page_obj.created_at.isoformat() if page_obj.created_at else None
+            }
+            for page_obj in pages
+        ],
+        "pagination": {
+            "page": page,
+            "page_size": page_size,
+            "total_items": total_pages,
+            "total_pages": total_pages_count,
+            "has_next": page < total_pages_count,
+            "has_prev": page > 1
         }
-        for page in pages
-    ]
+    }
 
 @router.get("/{contractor_id}/pages/{page_id}", response_model=WebPageDetailResponse)
 async def get_page_details(

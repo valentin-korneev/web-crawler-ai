@@ -35,6 +35,7 @@ import {
 } from '@mui/icons-material';
 import { api } from '../services/api';
 import { API_ENDPOINTS } from '../config/api';
+import Pagination from '../components/Pagination';
 
 interface Contractor {
   id: number;
@@ -88,6 +89,15 @@ interface PageDetails {
   violations: Violation[];
 }
 
+interface PaginationData {
+  page: number;
+  page_size: number;
+  total_items: number;
+  total_pages: number;
+  has_next: boolean;
+  has_prev: boolean;
+}
+
 const ContractorPages: React.FC = () => {
   const { contractorId } = useParams<{ contractorId: string }>();
   const [contractor, setContractor] = useState<Contractor | null>(null);
@@ -96,23 +106,49 @@ const ContractorPages: React.FC = () => {
   const [error, setError] = useState<string | null>(null);
   const [selectedPage, setSelectedPage] = useState<PageDetails | null>(null);
   const [detailsDialogOpen, setDetailsDialogOpen] = useState(false);
+  const [pagination, setPagination] = useState<PaginationData>({
+    page: 1,
+    page_size: 20,
+    total_items: 0,
+    total_pages: 0,
+    has_next: false,
+    has_prev: false,
+  });
 
   useEffect(() => {
-    fetchData();
-  }, [contractorId]);
+    if (contractorId) {
+      fetchData();
+    }
+  }, [contractorId, pagination.page, pagination.page_size]);
 
   const fetchData = async () => {
+    if (!contractorId) return;
+
     try {
       setLoading(true);
-      const [contractorResponse, pagesResponse] = await Promise.all([
-        api.get(API_ENDPOINTS.CONTRACTORS.GET(Number(contractorId))),
-        api.get(API_ENDPOINTS.CONTRACTORS.PAGES(Number(contractorId))),
-      ]);
-
-      console.log('Contractor data:', contractorResponse.data);
-      console.log('Pages data:', pagesResponse.data);
+      
+      // Получаем информацию о контрагенте
+      const contractorResponse = await api.get(API_ENDPOINTS.CONTRACTORS.GET(Number(contractorId)));
       setContractor(contractorResponse.data);
-      setPages(pagesResponse.data);
+      
+      // Получаем страницы контрагента с пагинацией
+      const pagesResponse = await api.get(API_ENDPOINTS.CONTRACTORS.PAGES(Number(contractorId)), {
+        params: {
+          page: pagination.page,
+          page_size: pagination.page_size,
+        },
+      });
+      
+      if (pagesResponse.data.items) {
+        setPages(pagesResponse.data.items);
+        setPagination(prev => ({
+          ...prev,
+          ...pagesResponse.data.pagination,
+        }));
+      } else {
+        // Fallback for old API format
+        setPages(pagesResponse.data);
+      }
     } catch (err: any) {
       console.error('Error fetching data:', err);
       setError(err.response?.data?.detail || 'Ошибка загрузки данных');
@@ -121,15 +157,22 @@ const ContractorPages: React.FC = () => {
     }
   };
 
+  const handlePageChange = (page: number) => {
+    setPagination(prev => ({ ...prev, page }));
+  };
+
+  const handlePageSizeChange = (pageSize: number) => {
+    setPagination(prev => ({ ...prev, page: 1, page_size: pageSize }));
+  };
+
   const handleViewDetails = async (pageId: number) => {
     try {
-      const response = await api.get(
-        API_ENDPOINTS.CONTRACTORS.PAGE_DETAILS(Number(contractorId), pageId)
-      );
+      const response = await api.get(API_ENDPOINTS.CONTRACTORS.PAGE_DETAILS(Number(contractorId), pageId));
       setSelectedPage(response.data);
       setDetailsDialogOpen(true);
     } catch (err: any) {
-      console.error('Ошибка загрузки деталей страницы:', err);
+      console.error('Error fetching page details:', err);
+      setError(err.response?.data?.detail || 'Ошибка загрузки деталей страницы');
     }
   };
 
@@ -139,14 +182,14 @@ const ContractorPages: React.FC = () => {
 
   const getStatusIcon = (status: string) => {
     switch (status) {
-      case 'completed':
+      case 'success':
         return <CheckCircleIcon color="success" />;
-      case 'failed':
+      case 'error':
         return <ErrorIcon color="error" />;
-      case 'scanning':
+      case 'pending':
         return <InfoIcon color="info" />;
       default:
-        return <InfoIcon color="action" />;
+        return <WarningIcon color="warning" />;
     }
   };
 
@@ -166,7 +209,9 @@ const ContractorPages: React.FC = () => {
   if (loading) {
     return (
       <Container maxWidth="lg" sx={{ mt: 4, mb: 4 }}>
-        <Typography variant="h6">Загрузка...</Typography>
+        <Box display="flex" justifyContent="center" alignItems="center" minHeight="200px">
+          <CircularProgress />
+        </Box>
       </Container>
     );
   }
@@ -179,66 +224,75 @@ const ContractorPages: React.FC = () => {
     );
   }
 
+  if (!contractor) {
+    return (
+      <Container maxWidth="lg" sx={{ mt: 4, mb: 4 }}>
+        <Alert severity="error">Контрагент не найден</Alert>
+      </Container>
+    );
+  }
+
   return (
     <Container maxWidth="lg" sx={{ mt: 4, mb: 4 }}>
-      {contractor && (
-        <Paper sx={{ p: 3, mb: 3 }}>
-          <Typography variant="h4" gutterBottom>
-            {contractor.name}
-          </Typography>
-          <Typography variant="subtitle1" color="text.secondary" gutterBottom>
-            {contractor.domain}
-          </Typography>
-          
-          <Grid container spacing={2} sx={{ mt: 2 }}>
-            <Grid item xs={12} sm={3}>
-              <Card>
-                <CardContent>
-                  <Typography variant="h6">{contractor.total_pages}</Typography>
-                  <Typography variant="body2" color="text.secondary">
-                    Всего страниц
-                  </Typography>
-                </CardContent>
-              </Card>
-            </Grid>
-            <Grid item xs={12} sm={3}>
-              <Card>
-                <CardContent>
-                  <Typography variant="h6">{contractor.scanned_pages}</Typography>
-                  <Typography variant="body2" color="text.secondary">
-                    Отсканировано
-                  </Typography>
-                </CardContent>
-              </Card>
-            </Grid>
-            <Grid item xs={12} sm={3}>
-              <Card>
-                <CardContent>
-                  <Typography variant="h6" color="error">
-                    {contractor.violations_found}
-                  </Typography>
-                  <Typography variant="body2" color="text.secondary">
-                    Нарушений
-                  </Typography>
-                </CardContent>
-              </Card>
-            </Grid>
-            <Grid item xs={12} sm={3}>
-              <Card>
-                <CardContent>
-                  <Typography variant="h6">
-                    {contractor.last_check ? new Date(contractor.last_check).toLocaleDateString() : 'Не сканировался'}
-                  </Typography>
-                  <Typography variant="body2" color="text.secondary">
-                    Последняя проверка
-                  </Typography>
-                </CardContent>
-              </Card>
-            </Grid>
-          </Grid>
-        </Paper>
-      )}
+      <Typography variant="h4" gutterBottom>
+        Страницы контрагента: {contractor.name}
+      </Typography>
+      
+      <Typography variant="body1" color="text.secondary" sx={{ mb: 3 }}>
+        {contractor.domain}
+      </Typography>
 
+      {/* Статистика */}
+      <Grid container spacing={2} sx={{ mb: 3 }}>
+        <Grid item xs={12} sm={3}>
+          <Card>
+            <CardContent>
+              <Typography variant="h6">{pagination.total_items}</Typography>
+              <Typography variant="body2" color="text.secondary">
+                Всего страниц
+              </Typography>
+            </CardContent>
+          </Card>
+        </Grid>
+        <Grid item xs={12} sm={3}>
+          <Card>
+            <CardContent>
+              <Typography variant="h6" color="primary">
+                {pages.filter(p => p.status === 'success').length}
+              </Typography>
+              <Typography variant="body2" color="text.secondary">
+                Успешно отсканировано
+              </Typography>
+            </CardContent>
+          </Card>
+        </Grid>
+        <Grid item xs={12} sm={3}>
+          <Card>
+            <CardContent>
+              <Typography variant="h6" color="error">
+                {pages.filter(p => p.violations_found).length}
+              </Typography>
+              <Typography variant="body2" color="text.secondary">
+                Страниц с нарушениями
+              </Typography>
+            </CardContent>
+          </Card>
+        </Grid>
+        <Grid item xs={12} sm={3}>
+          <Card>
+            <CardContent>
+              <Typography variant="h6" color="error">
+                {pages.reduce((sum, p) => sum + p.violations_count, 0)}
+              </Typography>
+              <Typography variant="body2" color="text.secondary">
+                Всего нарушений
+              </Typography>
+            </CardContent>
+          </Card>
+        </Grid>
+      </Grid>
+
+      {/* Таблица страниц */}
       <Paper sx={{ width: '100%', overflow: 'hidden' }}>
         <TableContainer>
           <Table stickyHeader>
@@ -270,40 +324,26 @@ const ContractorPages: React.FC = () => {
                   </TableCell>
                   <TableCell>{page.title || '-'}</TableCell>
                   <TableCell>
-                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                    <Box display="flex" alignItems="center" gap={1}>
                       {getStatusIcon(page.status)}
                       <Chip
                         label={page.status}
+                        color={page.status === 'success' ? 'success' : 'error'}
                         size="small"
-                        color={page.status === 'completed' ? 'success' : 'default'}
                       />
                     </Box>
                   </TableCell>
+                  <TableCell>{page.http_status || '-'}</TableCell>
+                  <TableCell>{page.response_time ? `${page.response_time}ms` : '-'}</TableCell>
                   <TableCell>
-                    {page.http_status ? (
-                      <Chip
-                        label={page.http_status}
-                        size="small"
-                        color={page.http_status === 200 ? 'success' : 'error'}
-                      />
-                    ) : (
-                      '-'
-                    )}
-                  </TableCell>
-                  <TableCell>
-                    {page.response_time ? `${page.response_time.toFixed(2)}s` : '-'}
-                  </TableCell>
-                  <TableCell>
-                    {page.violations_found ? (
+                    <Box display="flex" gap={1} alignItems="center">
                       <Chip
                         icon={<WarningIcon />}
                         label={page.violations_count}
-                        color="error"
+                        color={page.violations_count > 0 ? 'error' : 'default'}
                         size="small"
                       />
-                    ) : (
-                      <Chip label="Нет" color="success" size="small" />
-                    )}
+                    </Box>
                   </TableCell>
                   <TableCell>
                     {page.last_scanned
@@ -331,9 +371,21 @@ const ContractorPages: React.FC = () => {
             </TableBody>
           </Table>
         </TableContainer>
+        
+        {/* Пагинация */}
+        <Pagination
+          page={pagination.page}
+          pageSize={pagination.page_size}
+          totalItems={pagination.total_items}
+          totalPages={pagination.total_pages}
+          hasNext={pagination.has_next}
+          hasPrev={pagination.has_prev}
+          onPageChange={handlePageChange}
+          onPageSizeChange={handlePageSizeChange}
+        />
       </Paper>
 
-      {/* Диалог с деталями нарушений */}
+      {/* Диалог с деталями страницы */}
       <Dialog
         open={detailsDialogOpen}
         onClose={() => setDetailsDialogOpen(false)}
@@ -341,7 +393,7 @@ const ContractorPages: React.FC = () => {
         fullWidth
       >
         <DialogTitle>
-          Детали нарушений - {selectedPage?.title || selectedPage?.url}
+          Детали страницы - {selectedPage?.title || selectedPage?.url}
         </DialogTitle>
         <DialogContent>
           {selectedPage && (
@@ -358,27 +410,58 @@ const ContractorPages: React.FC = () => {
                 </Grid>
                 <Grid item xs={6}>
                   <Typography variant="body2" color="text.secondary">
+                    Заголовок:
+                  </Typography>
+                  <Typography variant="body1">{selectedPage.title || '-'}</Typography>
+                </Grid>
+                <Grid item xs={6}>
+                  <Typography variant="body2" color="text.secondary">
                     Статус:
                   </Typography>
-                  <Typography variant="body1">{selectedPage.status}</Typography>
+                  <Chip
+                    label={selectedPage.status}
+                    color={selectedPage.status === 'success' ? 'success' : 'error'}
+                    size="small"
+                  />
                 </Grid>
                 <Grid item xs={6}>
                   <Typography variant="body2" color="text.secondary">
                     HTTP статус:
                   </Typography>
-                  <Typography variant="body1">
-                    {selectedPage.http_status || '-'}
-                  </Typography>
+                  <Typography variant="body1">{selectedPage.http_status || '-'}</Typography>
                 </Grid>
                 <Grid item xs={6}>
                   <Typography variant="body2" color="text.secondary">
                     Время ответа:
                   </Typography>
                   <Typography variant="body1">
-                    {selectedPage.response_time ? `${selectedPage.response_time.toFixed(2)}s` : '-'}
+                    {selectedPage.response_time ? `${selectedPage.response_time}ms` : '-'}
+                  </Typography>
+                </Grid>
+                <Grid item xs={6}>
+                  <Typography variant="body2" color="text.secondary">
+                    Последнее сканирование:
+                  </Typography>
+                  <Typography variant="body1">
+                    {selectedPage.last_scanned
+                      ? new Date(selectedPage.last_scanned).toLocaleString()
+                      : '-'}
                   </Typography>
                 </Grid>
               </Grid>
+
+              {selectedPage.meta_description && (
+                <Box sx={{ mb: 3 }}>
+                  <Typography variant="h6" gutterBottom>
+                    Meta описание
+                  </Typography>
+                  <Paper sx={{ p: 2, backgroundColor: 'grey.100' }}>
+                    <Typography variant="body2">
+                      {selectedPage.meta_description}
+                    </Typography>
+                  </Paper>
+                </Box>
+              )}
 
               <Typography variant="h6" gutterBottom>
                 Нарушения ({selectedPage.violations.length})
